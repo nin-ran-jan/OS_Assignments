@@ -1,0 +1,36 @@
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index f6b57799c..7f600dfab 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -369,6 +369,7 @@
+ 445	common	landlock_add_rule	sys_landlock_add_rule
+ 446	common	landlock_restrict_self	sys_landlock_restrict_self
+ 447	common	memfd_secret		sys_memfd_secret
++448 common  kernel_2d_memcpy    sys_kernel_2d_memcpy
+ 
+ #
+ # Due to a historical design error, certain syscalls are numbered differently
+diff --git a/kernel/sys.c b/kernel/sys.c
+index ef1a78f5d..dd93603a5 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -636,6 +636,19 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+ 	return __sys_setuid(uid);
+ }
+ 
++SYSCALL_DEFINE4(kernel_2d_memcpy, float *, m1, float *, m2, int, row_number, int, column_number)
++{
++	float m[row_number][column_number];
++	if (copy_from_user(&m, m2, sizeof(m)) != 0)
++	{
++		return -EFAULT;
++	}
++	if (copy_to_user(m1, &m, sizeof(m)) != 0)
++	{
++		return -EFAULT;
++	}
++	return 0;
++}
+ 
+ /*
+  * This function implements a generic ability to update ruid, euid,

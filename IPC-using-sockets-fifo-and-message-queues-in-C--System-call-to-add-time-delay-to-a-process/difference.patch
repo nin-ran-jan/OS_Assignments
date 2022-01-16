@@ -1,0 +1,99 @@
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index f6b57799c..1644730d0 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -369,6 +369,8 @@
+ 445	common	landlock_add_rule	sys_landlock_add_rule
+ 446	common	landlock_restrict_self	sys_landlock_restrict_self
+ 447	common	memfd_secret		sys_memfd_secret
++448 common  kernel_2d_memcpy    sys_kernel_2d_memcpy
++449 common  add_time_lag        sys_add_time_lag
+ 
+ #
+ # Due to a historical design error, certain syscalls are numbered differently
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index ec8d07d88..67a67505c 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -473,6 +473,7 @@ struct sched_entity {
+ 	u64				sum_exec_runtime;
+ 	u64				vruntime;
+ 	u64				prev_sum_exec_runtime;
++	u64				time_lag;
+ 
+ 	u64				nr_migrations;
+ 
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index a2403432f..dbfd9749f 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -3956,6 +3956,7 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	p->se.prev_sum_exec_runtime	= 0;
+ 	p->se.nr_migrations		= 0;
+ 	p->se.vruntime			= 0;
++	p->se.time_lag			= 0;
+ 	INIT_LIST_HEAD(&p->se.group_node);
+ 
+ #ifdef CONFIG_FAIR_GROUP_SCHED
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 30a6984a5..7e041bdbd 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -811,7 +811,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
+ 	curr->sum_exec_runtime += delta_exec;
+ 	schedstat_add(cfs_rq->exec_clock, delta_exec);
+ 
+-	curr->vruntime += calc_delta_fair(delta_exec, curr);
++	curr->vruntime += curr->time_lag + calc_delta_fair(delta_exec, curr);
+ 	update_min_vruntime(cfs_rq);
+ 
+ 	if (entity_is_task(curr)) {
+diff --git a/kernel/sys.c b/kernel/sys.c
+index ef1a78f5d..54442a8ef 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -637,6 +637,51 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+ }
+ 
+ 
++SYSCALL_DEFINE2(add_time_lag, long, time_lag, pid_t, pid){
++    struct task_struct *p;
++    struct pid *pid_struct = NULL;
++
++    if(pid < 0){ //cannot have negative process IDs
++        return -EINVAL;
++    }
++    if(time_lag < 0){ //cannot have a negative time lag
++        return -EINVAL;
++    }
++    long time_lag_seconds = (long) (time_lag*1000000); //convert to nanosecond
++    
++    pid_struct = find_get_pid(pid); 
++    if(pid_struct == NULL){ //the process ID entered must correspond to some value of existing PID
++        return -ESRCH;
++    }
++
++    p = pid_task(pid_struct,PIDTYPE_PID);
++    p->se.time_lag = time_lag_seconds;
++
++    return 0;
++}
++
++
++SYSCALL_DEFINE4(kernel_2d_memcpy, float *, m1, float *, m2, int, row_number, int, column_number)
++{
++	float m[row_number][column_number];
++	if (copy_from_user(&m, m2, sizeof(m)) != 0)
++	{
++		return -EFAULT;
++	}
++	if (copy_to_user(m1, &m, sizeof(m)) != 0)
++	{
++		return -EFAULT;
++	}
++	return 0;
++}
++
+ /*
+  * This function implements a generic ability to update ruid, euid,
+  * and suid.  This allows you to implement the 4.4 compatible seteuid().

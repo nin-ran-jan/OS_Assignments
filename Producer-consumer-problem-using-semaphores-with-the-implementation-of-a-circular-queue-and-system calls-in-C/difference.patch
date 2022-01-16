@@ -1,0 +1,132 @@
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 7f600dfab..afc5c47e2 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -370,6 +370,8 @@
+ 446	common	landlock_restrict_self	sys_landlock_restrict_self
+ 447	common	memfd_secret		sys_memfd_secret
+ 448 common  kernel_2d_memcpy    sys_kernel_2d_memcpy
++449 common  reader              sys_reader
++450 common  writer              sys_writer
+ 
+ #
+ # Due to a historical design error, certain syscalls are numbered differently
+diff --git a/kernel/sys.c b/kernel/sys.c
+index dd93603a5..51dab3082 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -50,6 +50,11 @@
+ #include <linux/time_namespace.h>
+ #include <linux/binfmts.h>
+ 
++#include <linux/delay.h>
++#include <linux/uaccess.h>
++#include <linux/semaphore.h>
++#include <linux/module.h>
++
+ #include <linux/sched.h>
+ #include <linux/sched/autogroup.h>
+ #include <linux/sched/loadavg.h>
+@@ -636,6 +641,102 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+ 	return __sys_setuid(uid);
+ }
+ 
++int length = 5;
++int head = -1;
++int tail = -1;
++unsigned long long *circularQueue = NULL;
++struct semaphore consumer, mutexLock, producer;
++
++SYSCALL_DEFINE1(reader, unsigned long long *, kernToUser)
++{
++	if (circularQueue == NULL)
++	{
++		circularQueue = (unsigned long long *) kmalloc(length*sizeof(unsigned long long), GFP_KERNEL);
++		
++		tail = -1;
++		head = -1; //global renaming necessary
++
++		sema_init(&producer, length);
++		sema_init(&consumer, 0);
++		sema_init(&mutexLock, 1); 
++	}
++
++	
++
++	if (head == -1) 
++	{
++		printk("\nQueue is empty\n");
++		return 1;
++	} 
++
++	down(&consumer);
++	down(&mutexLock);
++
++	unsigned long long element = circularQueue[head];
++
++	if (head == tail) 
++	{
++		head = -1;
++		tail = -1;
++	} 
++
++	else 
++	{
++		head = (head + 1) % length;
++	}
++
++	up(&mutexLock);
++	up(&producer);
++
++	if(copy_to_user(kernToUser, &element, sizeof(element)) != 0)
++	{
++		return -EFAULT;
++	}
++
++	printk("Dequeued in kernel -> %llu", element);
++	return 0;
++
++}
++
++SYSCALL_DEFINE1(writer, unsigned long long, userToKern)
++{
++	if (circularQueue == NULL)
++	{
++		circularQueue = (unsigned long long *) kmalloc(length*sizeof(unsigned long long), GFP_KERNEL);
++		
++		tail = -1;
++		head = -1; //global renaming necessary
++
++		sema_init(&producer, length);
++		sema_init(&consumer, 0);
++		sema_init(&mutexLock, 1); 
++	}
++
++	if ( (head == 0 && tail == length - 1) || (head == tail + 1))
++	{
++		printk("\nQueue is full\n");
++		return 1;
++	}
++
++	down(&producer);
++	down(&mutexLock);
++
++	if (head == -1)
++	{
++		head = 0;
++	}
++
++	tail = (tail + 1)%length;
++	circularQueue[tail] = userToKern;
++
++	up(&mutexLock);
++	up(&consumer);
++
++	printk("Enqueued in kernel-> %llu", userToKern);
++	return 0;
++}
++
++
+ SYSCALL_DEFINE4(kernel_2d_memcpy, float *, m1, float *, m2, int, row_number, int, column_number)
+ {
+ 	float m[row_number][column_number];
